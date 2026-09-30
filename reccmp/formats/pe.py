@@ -17,6 +17,7 @@ from .exceptions import (
     InvalidVirtualAddressError,
     SectionNotFoundError,
 )
+from reccmp.types import ConcreteBuffer
 from .image import Image, ImageRegion, ImageSection, ImageSectionFlags, ImageImport
 from .mz import ImageDosHeader
 
@@ -484,6 +485,36 @@ def get_pe_sections(
         )
 
 
+def find_incremental_thunks(
+    raw: ConcreteBuffer, base_addr: int, strict: bool = False
+) -> list[tuple[int, int]]:
+    """Read the table of thunks an incremental link puts at the start of a code
+    section: a run of 5-byte relative JMPs, one per function. Return the address
+    of each thunk and its destination.
+
+    If strict is set, accept the run only if it looks like such a table: it is
+    followed by 0xcc padding and every destination lies in the section, past the
+    table. Use this when nothing else says the image was linked incrementally."""
+    thunks = []
+    ofs = 0
+    while ofs + 5 <= len(raw) and raw[ofs] == 0xE9:
+        (operand,) = struct.unpack_from("<i", raw, ofs + 1)
+        thunk_addr = base_addr + ofs
+        thunks.append((thunk_addr, thunk_addr + 5 + operand))
+        ofs += 5
+
+    if strict and thunks:
+        table_end = base_addr + ofs
+        section_end = base_addr + len(raw)
+        if ofs >= len(raw) or raw[ofs] != 0xCC:
+            return []
+
+        if not all(table_end < dest < section_end for _, dest in thunks):
+            return []
+
+    return thunks
+
+
 # pylint: disable=too-many-public-methods
 @dataclasses.dataclass
 class PEImage(Image):
@@ -738,28 +769,21 @@ class PEImage(Image):
 
     @cached_property
     def thunks(self) -> list[tuple[int, int]]:
-        """For each imported function, we generate a thunk function. The only
-        instruction in the function is a jmp to the address in .idata.
-        Search .text to find these functions."""
+        """An incremental link calls each function through a thunk: a jmp to the
+        function. The thunks form a table at the start of .text, terminated by
+        a big block of 0xcc padding bytes before the first real function in the
+        section.
 
-        if not self.is_debug:
-            return []
+        Debug builds are usually linked incrementally, so their table is read
+        as is. Other images can be linked incrementally too (e.g. a release EXE
+        built with /INCREMENTAL:yes), so their table is accepted only if it
+        passes the stricter checks of find_incremental_thunks."""
 
         thunks = []
-        # If this is a debug build, read the thunks at the start of .text
-        # Terminated by a big block of 0xcc padding bytes before the first
-        # real function in the section.
         for sect in self.get_code_regions():
-            ofs = 0
-            while True:
-                opcode, operand = struct.unpack("<Bi", sect.data[ofs : ofs + 5])
-                if opcode != 0xE9:
-                    break
-
-                thunk_ofs = sect.addr + ofs
-                jmp_ofs = thunk_ofs + 5 + operand
-                thunks.append((thunk_ofs, jmp_ofs))
-                ofs += 5
+            thunks.extend(
+                find_incremental_thunks(sect.data, sect.addr, strict=not self.is_debug)
+            )
 
         return thunks
 
