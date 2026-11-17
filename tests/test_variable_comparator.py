@@ -118,6 +118,73 @@ def test_compare_pointer_diff(db: EntityDb, types: CvdumpTypesParser):
     assert "Hello" in recomp_value
 
 
+def test_compare_pointer_integer_match(db: EntityDb, types: CvdumpTypesParser):
+    """A pointer variable that holds the same integer in both binaries, one that
+    addresses neither image, is a match: the pointer member holds an index or an id."""
+    create_matched_variable(db, 0x1000, data_type=CVInfoTypeEnum.T_32PVOID)
+
+    orig = RawImage.from_memory(b"\x02\x00\x00\x00", base_addr=0x1000)
+    recomp = RawImage.from_memory(b"\x02\x00\x00\x00", base_addr=0x1000)
+    comparator = VariableComparator(db, types, orig, recomp)
+
+    c = comparator.compare_variable(get_match(db, 0x1000))
+
+    assert c is not None
+    assert c.result == CompareResult.MATCH
+    assert c.compared[0].values == ("0x2 (not an address)", "0x2 (not an address)")
+
+
+def test_compare_pointer_integer_diff(db: EntityDb, types: CvdumpTypesParser):
+    """Two different integers in a pointer variable are a diff."""
+    create_matched_variable(db, 0x1000, data_type=CVInfoTypeEnum.T_32PVOID)
+
+    orig = RawImage.from_memory(b"\x02\x00\x00\x00", base_addr=0x1000)
+    recomp = RawImage.from_memory(b"\x03\x00\x00\x00", base_addr=0x1000)
+    comparator = VariableComparator(db, types, orig, recomp)
+
+    c = comparator.compare_variable(get_match(db, 0x1000))
+
+    assert c is not None
+    assert c.result == CompareResult.DIFF
+
+
+def test_compare_pointer_same_unmatched_address_diff(
+    db: EntityDb, types: CvdumpTypesParser
+):
+    """Equal values are not enough for a value inside the image: an address
+    is compared by what it points to, and here nothing is matched there."""
+    create_matched_variable(db, 0x1008, data_type=CVInfoTypeEnum.T_32PVOID)
+
+    # Both pointers hold 0x1000: inside each image, before any entity.
+    data = b"\x00" * 8 + b"\x00\x10\x00\x00"
+    orig = RawImage.from_memory(data, base_addr=0x1000)
+    recomp = RawImage.from_memory(data, base_addr=0x1000)
+    comparator = VariableComparator(db, types, orig, recomp)
+
+    c = comparator.compare_variable(get_match(db, 0x1008))
+
+    assert c is not None
+    assert c.result == CompareResult.DIFF
+
+
+def test_compare_pointer_integer_one_side_address_diff(
+    db: EntityDb, types: CvdumpTypesParser
+):
+    """The same value is a diff when it addresses one of the images."""
+    create_matched_variable(db, 0x1008, data_type=CVInfoTypeEnum.T_32PVOID)
+
+    # 0x1000 is inside the recomp image only.
+    data = b"\x00" * 8 + b"\x00\x10\x00\x00"
+    orig = RawImage.from_memory(data[8:], base_addr=0x1008)
+    recomp = RawImage.from_memory(data, base_addr=0x1000)
+    comparator = VariableComparator(db, types, orig, recomp)
+
+    c = comparator.compare_variable(get_match(db, 0x1008))
+
+    assert c is not None
+    assert c.result == CompareResult.DIFF
+
+
 def test_compare_null_pointer(db: EntityDb, types: CvdumpTypesParser):
     """Pointer variables set to zero in both binaries are matches."""
     create_matched_variable(db, 0, data_type=CVInfoTypeEnum.T_32PVOID)

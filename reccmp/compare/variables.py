@@ -243,6 +243,17 @@ class VariableComparator:
 
         return self.db.is_match(orig_addr, recomp_addr)
 
+    def is_integer_match(self, orig_val: int, recomp_val: int) -> bool:
+        """Check whether a pointer-typed value holds the same integer in both binaries.
+        A pointer member can hold an integer instead of an address (an index, an id or
+        a count stored in a pointer-sized slot). A value that addresses neither image
+        can't be compared by its target, so compare it by value."""
+        return (
+            orig_val == recomp_val
+            and not self.orig_bin.is_valid_vaddr(orig_val)
+            and not self.recomp_bin.is_valid_vaddr(recomp_val)
+        )
+
     def is_pointer_match_to_offset(self, orig_addr: int, recomp_addr: int) -> bool:
         """Check whether these pointers point at the same offset of the same matched entity."""
         orig_ent = self.db.get(ImageId.ORIG, orig_addr, exact=False)
@@ -347,10 +358,16 @@ class VariableComparator:
                 if not match:
                     match = self.is_pointer_match_to_offset(orig_val, recomp_val)
 
-                value_a = pointer_display(self.db, self.types, ImageId.ORIG, orig_val)
-                value_b = pointer_display(
-                    self.db, self.types, ImageId.RECOMP, recomp_val
-                )
+                if not match and self.is_integer_match(orig_val, recomp_val):
+                    match = True
+                    value_a = value_b = f"0x{orig_val:x} (not an address)"
+                else:
+                    value_a = pointer_display(
+                        self.db, self.types, ImageId.ORIG, orig_val
+                    )
+                    value_b = pointer_display(
+                        self.db, self.types, ImageId.RECOMP, recomp_val
+                    )
             else:
                 match = orig_val == recomp_val
                 value_a = str(orig_val)
