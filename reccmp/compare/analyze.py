@@ -156,11 +156,25 @@ def create_imports(db: EntityDb, image_id: ImageId, binfile: Image):
 
 
 def create_import_thunks(db: EntityDb, image_id: ImageId, binfile: Image):
+    """Create IMPORT_THUNK entities for the 6-byte absolute JMPs to an import.
+    A function already matched by the time this runs (an annotation found in the
+    recompiled image) is left alone: an optimized function whose whole body is a tail
+    call to an import (`return joyGetNumDevs();`) compiles to the same JMP. Real import
+    thunks aren't matched yet here (match_imports pairs them later), so they are still
+    created, whatever type the PDB's publics gave the recompiled ones."""
     if not isinstance(binfile, PEImage):
         return
 
     with db.batch() as batch:
         for thunk in find_import_thunks(binfile):
+            existing = db.get(image_id, thunk.addr)
+            if (
+                existing is not None
+                and existing.matched
+                and existing.entity_type == EntityType.FUNCTION
+            ):
+                continue
+
             batch.set(
                 image_id,
                 thunk.addr,

@@ -464,6 +464,39 @@ def test_create_import_thunks(db: EntityDb):
     assert get_ref_addr(db, ImageId.ORIG, 0x2000) == 0x1000
 
 
+def test_create_import_thunks_matched_function(db: EntityDb):
+    """A function already matched (an annotated tail call to an import, which compiles
+    to the same 6-byte JMP) is not turned into an IMPORT_THUNK. An unmatched
+    function entity at a thunk address (a PDB public for a real thunk) still is."""
+    binfile = Mock(spec=PEImage)
+    binfile.imports = (ImageImport(addr=0x1000, module="TEST", name="Hello"),)
+    binfile.get_code_regions = Mock(
+        return_value=(
+            ImageRegion(
+                0x2000, b"\xff\x25\x00\x10\x00\x00\xcc\xcc\xff\x25\x00\x10\x00\x00"
+            ),
+        ),
+    )
+    binfile.relocations = set([0x2002, 0x200A])
+
+    with db.batch() as batch:
+        batch.set(ImageId.ORIG, 0x2000, type=EntityType.FUNCTION, name="GetCount")
+        batch.set(ImageId.RECOMP, 0x3000, type=EntityType.FUNCTION, name="GetCount")
+        batch.match(0x2000, 0x3000)
+        batch.set(ImageId.ORIG, 0x2008, type=EntityType.FUNCTION, name="_Hello@0")
+
+    create_import_thunks(db, ImageId.ORIG, binfile)
+
+    e = db.get(ImageId.ORIG, 0x2000)
+    assert e is not None
+    assert e.get("type") == EntityType.FUNCTION
+    assert e.get("skip") is None
+
+    e = db.get(ImageId.ORIG, 0x2008)
+    assert e is not None
+    assert e.get("type") == EntityType.IMPORT_THUNK
+
+
 def test_create_import_thunks_pe_only(db: EntityDb):
     """At the moment, we have seen import thunks on PE images only.
     create_import_thunks should be a no-op if the image is not PE."""
